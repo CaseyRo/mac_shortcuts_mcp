@@ -333,9 +333,10 @@ class FastMCPServerAdapter(FastMCPBase[Any]):
         self,
         transport: str = "stdio",
         mount_path: str | None = None,
+        **kwargs: Any,
     ) -> None:
         del mount_path
-        anyio.run(self.run_async, transport=transport)
+        anyio.run(self.run_async, transport=transport, **kwargs)
 
 
 fastmcp_server = FastMCPServerAdapter()
