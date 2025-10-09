@@ -2,37 +2,23 @@
 
 from __future__ import annotations
 
-import asyncio
-import anyio
-from collections.abc import Awaitable, Callable, Sequence
-from importlib.metadata import version
+from collections.abc import Iterable
+from importlib.metadata import PackageNotFoundError, version as pkg_version
 from typing import Any
 
-from mcp import types
-from mcp.server import Server
+import anyio
 from fastmcp.server.server import FastMCP as FastMCPBase
-
-from mac_shortcuts_mcp import __version__
-from mac_shortcuts_mcp.shortcuts import ShortcutExecutionError, run_shortcut
-from importlib.metadata import PackageNotFoundError, version as pkg_version
-from typing import Annotated, Any, Iterable
-
-from mcp import types
+from fastmcp.tools.tool import TextContent, ToolResult
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from pydantic import BaseModel, ConfigDict, Field
-from importlib.metadata import version
-from typing import Any
-
-from fastmcp import FastMCP
-from fastmcp.tools.tool import TextContent, ToolResult
 from pydantic import BaseModel, Field
-from starlette.middleware import Middleware
-from starlette.middleware.cors import CORSMiddleware
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__
-from .shortcuts import run_shortcut
+from .shortcuts import (
+    ShortcutExecutionError,
+    ShortcutExecutionResult,
+    run_shortcut,
+)
 
 SERVER_NAME = "mac-shortcuts-mcp"
 RUN_SHORTCUT_TOOL_NAME = "run_shortcut"
@@ -126,46 +112,32 @@ def _get_version() -> str:
         return __version__
 
 
-class RunShortcutResult(BaseModel):
-    """Structured result payload returned from the run_shortcut tool."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    command: list[str]
-    returnCode: int | None
-    stdout: str
-    stderr: str
-    timedOut: bool
-    succeeded: bool
-    summary: str = Field(default="No output produced.", exclude=True)
-
-
 def _build_summary(
     *,
     shortcut_name: str,
-    execution_result: RunShortcutResult,
+    execution: ShortcutExecutionResult,
     timeout_seconds: float | None,
 ) -> str:
     """Construct a human readable summary for tool output."""
 
     summary_lines: list[str] = []
 
-    if execution_result.timedOut:
+    if execution.timed_out:
         if timeout_seconds is not None:
             summary_lines.append(
                 f"Shortcut '{shortcut_name}' timed out after {timeout_seconds} seconds."
             )
         else:
             summary_lines.append(f"Shortcut '{shortcut_name}' timed out.")
-    elif execution_result.succeeded:
+    elif execution.succeeded:
         summary_lines.append(f"Shortcut '{shortcut_name}' completed successfully.")
     else:
         summary_lines.append(
-            f"Shortcut '{shortcut_name}' exited with return code {execution_result.returnCode}."
+            f"Shortcut '{shortcut_name}' exited with return code {execution.return_code}."
         )
 
-    stdout_text = execution_result.stdout.strip()
-    stderr_text = execution_result.stderr.strip()
+    stdout_text = execution.stdout.strip()
+    stderr_text = execution.stderr.strip()
 
     if stdout_text:
         summary_lines.append("--- stdout ---\n" + stdout_text)
@@ -183,6 +155,56 @@ def _validate_timeout(timeout_value: float | None) -> float | None:
     return timeout_value
 
 
+def _register_run_shortcut_tool(app: FastMCP) -> None:
+    """Attach the run_shortcut tool to the provided FastMCP app."""
+
+    @app.tool(
+        name=RUN_SHORTCUT_TOOL_NAME,
+        description=(
+            "Run a Siri Shortcut that exists on the host macOS machine using "
+            "the `shortcuts run` command."
+        ),
+        output_schema=RUN_SHORTCUT_OUTPUT_SCHEMA,
+    )
+    async def _run_shortcut_tool(arguments: RunShortcutArguments) -> ToolResult:
+        shortcut_name = arguments.shortcutName.strip()
+        if not shortcut_name:
+            raise ShortcutExecutionError("`shortcutName` must be a non-empty string.")
+
+        timeout_seconds = _validate_timeout(arguments.timeoutSeconds)
+
+        execution = await run_shortcut(
+            shortcut_name=shortcut_name,
+            text_input=arguments.textInput,
+            timeout=timeout_seconds,
+        )
+
+        structured = RunShortcutStructuredResponse(
+            command=list(execution.command),
+            returnCode=execution.return_code,
+            stdout=execution.stdout,
+            stderr=execution.stderr,
+            timedOut=execution.timed_out,
+            succeeded=execution.succeeded,
+        )
+
+        summary = _build_summary(
+            shortcut_name=shortcut_name,
+            execution=execution,
+            timeout_seconds=timeout_seconds,
+        )
+
+        return ToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text=summary,
+                )
+            ],
+            structured_content=structured.model_dump(),
+        )
+
+
 def create_fastmcp_app(
     *,
     host: str = "127.0.0.1",
@@ -193,118 +215,6 @@ def create_fastmcp_app(
     allowed_origins: Iterable[str] | None = None,
 ) -> FastMCP:
     """Create a configured FastMCP application for this server."""
-
-    server = Server(
-        name=SERVER_NAME,
-        version=_get_version(),
-        instructions=SERVER_INSTRUCTIONS,
-        website_url="https://support.apple.com/guide/shortcuts/welcome/mac",
-    instructions = (
-        "Execute Siri Shortcuts on macOS hosts using the `shortcuts` command line tool. "
-        "Provide the shortcut display name and optional text input."
-    )
-def get_app() -> FastMCP:
-    """Return a configured FastMCP application instance."""
-
-    global _APP
-    if _APP is not None:
-        return _APP
-
-    instructions = (
-        "Execute Siri Shortcuts on macOS hosts using the `shortcuts` command line tool. "
-        "Provide the shortcut display name and optional text input."
-    )
-
-    app = FastMCP(
-        name=SERVER_NAME,
-        version=_get_version(),
-        instructions=instructions,
-    )
-    app._mcp_server.website_url = (
-        "https://support.apple.com/guide/shortcuts/welcome/mac"
-    )
-
-    @app.tool(
-        name=RUN_SHORTCUT_TOOL_NAME,
-        description=(
-            "Run a Siri Shortcut that exists on the host macOS machine using "
-            "the `shortcuts run` command."
-        ),
-        output_schema=RUN_SHORTCUT_OUTPUT_SCHEMA,
-    )
-    async def _run_shortcut_tool(
-        arguments: RunShortcutArguments,
-    ) -> ToolResult:
-        timeout_seconds = (
-            float(arguments.timeoutSeconds)
-            if arguments.timeoutSeconds is not None
-            else None
-        )
-
-        result = await run_shortcut(
-            shortcut_name=arguments.shortcutName,
-            text_input=arguments.textInput,
-            timeout=timeout_seconds,
-        )
-
-        summary_lines: list[str] = []
-        if result.timed_out:
-            if timeout_seconds is not None:
-                summary_lines.append(
-                    f"Shortcut '{arguments.shortcutName}' timed out after {timeout_seconds} seconds."
-                )
-            else:
-                summary_lines.append(
-                    f"Shortcut '{arguments.shortcutName}' timed out."
-                )
-        elif result.succeeded:
-            summary_lines.append(
-                f"Shortcut '{arguments.shortcutName}' completed successfully."
-            )
-        else:
-            summary_lines.append(
-                f"Shortcut '{arguments.shortcutName}' exited with return code {result.return_code}."
-            )
-
-        stdout_text = result.stdout.strip()
-        stderr_text = result.stderr.strip()
-        if stdout_text:
-            summary_lines.append("--- stdout ---\n" + stdout_text)
-        if stderr_text:
-            summary_lines.append("--- stderr ---\n" + stderr_text)
-
-        structured = RunShortcutStructuredResponse(
-            command=list(result.command),
-            returnCode=result.return_code,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            timedOut=result.timed_out,
-            succeeded=result.succeeded,
-        )
-
-        content = [
-            TextContent(
-                type="text",
-                text="\n\n".join(summary_lines)
-                if summary_lines
-                else "No output produced.",
-            )
-        ]
-
-        return ToolResult(
-            content=content,
-            structured_content=structured.model_dump(),
-        )
-
-    _APP = app
-    return app
-
-
-async def serve_stdio() -> None:
-    """Run the MCP server over stdio using FastMCP's runner."""
-
-    app = get_app()
-    await app.run_stdio_async()
 
     allow_hosts = list(allowed_hosts or [])
     allow_origins = list(allowed_origins or [])
@@ -319,7 +229,7 @@ async def serve_stdio() -> None:
     app = FastMCP(
         name=SERVER_NAME,
         version=_get_version(),
-        instructions=instructions,
+        instructions=SERVER_INSTRUCTIONS,
         website_url="https://support.apple.com/guide/shortcuts/welcome/mac",
         host=host,
         port=port,
@@ -328,67 +238,26 @@ async def serve_stdio() -> None:
         transport_security=transport_security,
     )
 
-    @app.tool(
-        name=RUN_SHORTCUT_TOOL_NAME,
-        description=(
-            "Run a Siri Shortcut that exists on the host macOS machine using "
-            "the `shortcuts run` command."
-        ),
-        structured_output=True,
-    )
-    async def run_shortcut_tool(
-        shortcutName: Annotated[str, Field(min_length=1)],
-        textInput: str | None = None,
-        timeoutSeconds: Annotated[float | None, Field(gt=0)] = None,
-    ) -> RunShortcutResult:
-        """Execute a Shortcut and return structured telemetry."""
-
-        if not shortcutName.strip():
-            raise ShortcutExecutionError("`shortcutName` must be a non-empty string.")
-
-        timeout_seconds = _validate_timeout(timeoutSeconds)
-
-        execution = await run_shortcut(
-            shortcut_name=shortcutName,
-            text_input=textInput,
-            timeout=timeout_seconds,
-        )
-
-        structured = RunShortcutResult(
-            command=list(execution.command),
-            returnCode=execution.return_code,
-            stdout=execution.stdout,
-            stderr=execution.stderr,
-            timedOut=execution.timed_out,
-            succeeded=execution.succeeded,
-        )
-
-        structured.summary = _build_summary(
-            shortcut_name=shortcutName,
-            execution_result=structured,
-            timeout_seconds=timeout_seconds,
-        )
-
-        return structured
-
-    tool = app._tool_manager.get_tool(RUN_SHORTCUT_TOOL_NAME)
-    if tool is not None:
-        original_convert_result = tool.fn_metadata.convert_result
-
-        def _convert_result(result: RunShortcutResult) -> tuple[list[types.TextContent], dict[str, Any]] | Any:
-            if isinstance(result, RunShortcutResult):
-                summary_text = result.summary or "No output produced."
-                content = [types.TextContent(type="text", text=summary_text)]
-                structured_payload = result.model_dump(
-                    mode="json", by_alias=True, exclude={"summary"}
-                )
-                return content, structured_payload
-
-            return original_convert_result(result)
-
-        tool.fn_metadata.convert_result = _convert_result  # type: ignore[assignment]
-
+    _register_run_shortcut_tool(app)
     return app
+
+
+def get_app() -> FastMCP:
+    """Return a cached FastMCP application instance."""
+
+    global _APP
+    if _APP is None:
+        _APP = create_fastmcp_app()
+    return _APP
+
+
+async def serve_stdio() -> None:
+    """Run the MCP server over stdio using FastMCP's runner."""
+
+    app = get_app()
+    await app.run_stdio_async()
+
+
 async def serve_http(
     *,
     host: str,
@@ -402,44 +271,36 @@ async def serve_http(
 ) -> None:
     """Run the MCP server using FastMCP's HTTP/SSE runner."""
 
-    app = get_app()
-
-    # Configure response format and stateless behaviour on the server instance.
-    app._deprecated_settings.json_response = json_response
-    app._deprecated_settings.stateless_http = stateless
-
-    middleware: list[Middleware] = []
-    if allowed_hosts:
-        middleware.append(
-            Middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
-        )
-    if allowed_origins:
-        middleware.append(
-            Middleware(
-                CORSMiddleware,
-                allow_origins=allowed_origins,
-                allow_methods=["*"],
-                allow_headers=["*"],
-            )
-        )
-
-    uvicorn_config: dict[str, Any] = {}
-    if ssl_certfile and ssl_keyfile:
-        uvicorn_config["ssl_certfile"] = ssl_certfile
-        uvicorn_config["ssl_keyfile"] = ssl_keyfile
-
-    await app.run_http_async(
-        transport="streamable-http",
+    app = create_fastmcp_app(
         host=host,
         port=port,
-        uvicorn_config=uvicorn_config or None,
-        middleware=middleware or None,
+        json_response=json_response,
         stateless_http=stateless,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
     )
+
+    if ssl_certfile or ssl_keyfile:
+        import uvicorn
+
+        http_app = app.streamable_http_app()
+        config = uvicorn.Config(
+            http_app,
+            host=app.settings.host,
+            port=app.settings.port,
+            log_level=app.settings.log_level.lower(),
+            ssl_certfile=ssl_certfile,
+            ssl_keyfile=ssl_keyfile,
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
+        return
+
+    await app.run_streamable_http_async()
 
 
 class FastMCPServerAdapter(FastMCPBase[Any]):
-    """Adapter to expose the legacy server via the FastMCP CLI."""
+    """Adapter to expose the server via the FastMCP CLI."""
 
     def __init__(self) -> None:
         super().__init__(
@@ -453,9 +314,9 @@ class FastMCPServerAdapter(FastMCPBase[Any]):
         transport: str | None = None,
         host: str | None = None,
         port: int | None = None,
-        path: str | None = None,  # Unused but accepted for API compatibility
-        log_level: str | None = None,  # Unused but accepted for API compatibility
-        show_banner: bool | None = None,  # Unused but accepted for API compatibility
+        path: str | None = None,
+        log_level: str | None = None,
+        show_banner: bool | None = None,
         **_: Any,
     ) -> None:
         del path, log_level, show_banner
@@ -491,4 +352,3 @@ class FastMCPServerAdapter(FastMCPBase[Any]):
 
 fastmcp_server = FastMCPServerAdapter()
 server = fastmcp_server
-
