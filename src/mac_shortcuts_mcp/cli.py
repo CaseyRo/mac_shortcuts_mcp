@@ -8,8 +8,10 @@ from typing import Optional
 
 import typer
 
+from mcp.server.fastmcp import FastMCP
+
 from . import __version__
-from .server import serve_http, serve_stdio
+from .server import create_fastmcp_app
 
 app = typer.Typer(
     help="Run the mac-shortcuts-mcp server over stdio or HTTP.",
@@ -28,7 +30,32 @@ def version() -> None:
 def stdio() -> None:
     """Start the MCP server using the stdio transport."""
 
-    asyncio.run(serve_stdio())
+    app_instance = create_fastmcp_app()
+    asyncio.run(app_instance.run_stdio_async())
+
+
+async def _run_http(
+    app_instance: FastMCP,
+    *,
+    ssl_certfile: str | None,
+    ssl_keyfile: str | None,
+) -> None:
+    if ssl_certfile or ssl_keyfile:
+        import uvicorn
+
+        http_app = app_instance.streamable_http_app()
+        config = uvicorn.Config(
+            http_app,
+            host=app_instance.settings.host,
+            port=app_instance.settings.port,
+            log_level=app_instance.settings.log_level.lower(),
+            ssl_certfile=ssl_certfile,
+            ssl_keyfile=ssl_keyfile,
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
+    else:
+        await app_instance.run_streamable_http_async()
 
 
 @app.command()
@@ -84,15 +111,20 @@ def http(
     else:
         ssl_options = {}
 
+    app_instance = create_fastmcp_app(
+        host=host,
+        port=port,
+        json_response=json_response,
+        stateless_http=stateless,
+        allowed_hosts=allowed_host,
+        allowed_origins=allowed_origin,
+    )
+
     asyncio.run(
-        serve_http(
-            host=host,
-            port=port,
-            json_response=json_response,
-            stateless=stateless,
-            allowed_hosts=allowed_host,
-            allowed_origins=allowed_origin,
-            **ssl_options,
+        _run_http(
+            app_instance,
+            ssl_certfile=ssl_options.get("ssl_certfile"),
+            ssl_keyfile=ssl_options.get("ssl_keyfile"),
         )
     )
 
