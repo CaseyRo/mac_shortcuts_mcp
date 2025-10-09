@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
+import anyio
 from collections.abc import Awaitable, Callable, Sequence
 from importlib.metadata import version
 from typing import Any
 
 from mcp import types
 from mcp.server import Server
+from fastmcp.server.server import FastMCP as FastMCPBase
 
-from . import __version__
-from .shortcuts import ShortcutExecutionError, run_shortcut
+from mac_shortcuts_mcp import __version__
+from mac_shortcuts_mcp.shortcuts import ShortcutExecutionError, run_shortcut
 
 SERVER_NAME = "mac-shortcuts-mcp"
 RUN_SHORTCUT_TOOL_NAME = "run_shortcut"
+SERVER_INSTRUCTIONS = (
+    "Execute Siri Shortcuts on macOS hosts using the `shortcuts` command line tool. "
+    "Provide the shortcut display name and optional text input."
+)
 
 
 def _get_version() -> str:
@@ -26,14 +33,10 @@ def _get_version() -> str:
 def create_server() -> Server[Any, Any]:
     """Create and configure the MCP server instance."""
 
-    instructions = (
-        "Execute Siri Shortcuts on macOS hosts using the `shortcuts` command line tool. "
-        "Provide the shortcut display name and optional text input."
-    )
     server = Server(
         name=SERVER_NAME,
         version=_get_version(),
-        instructions=instructions,
+        instructions=SERVER_INSTRUCTIONS,
         website_url="https://support.apple.com/guide/shortcuts/welcome/mac",
     )
 
@@ -283,4 +286,58 @@ async def serve_http(
     )
     server_runner = uvicorn.Server(uvicorn_config)
     await server_runner.serve()
+
+
+class FastMCPServerAdapter(FastMCPBase[Any]):
+    """Adapter to expose the legacy server via the FastMCP CLI."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            name=SERVER_NAME,
+            instructions=SERVER_INSTRUCTIONS,
+        )
+
+    async def run_async(
+        self,
+        *,
+        transport: str | None = None,
+        host: str | None = None,
+        port: int | None = None,
+        path: str | None = None,  # Unused but accepted for API compatibility
+        log_level: str | None = None,  # Unused but accepted for API compatibility
+        show_banner: bool | None = None,  # Unused but accepted for API compatibility
+        **_: Any,
+    ) -> None:
+        del path, log_level, show_banner
+
+        normalized_transport = (transport or "stdio").lower()
+        if normalized_transport == "stdio":
+            await serve_stdio()
+            return
+
+        if normalized_transport in {"http", "streamable-http", "sse"}:
+            json_response = normalized_transport == "http"
+            await serve_http(
+                host=host or "0.0.0.0",
+                port=port or 8000,
+                json_response=json_response,
+                stateless=False,
+                allowed_hosts=[],
+                allowed_origins=[],
+            )
+            return
+
+        raise ValueError(f"Unsupported transport: {transport}")
+
+    def run(
+        self,
+        transport: str = "stdio",
+        mount_path: str | None = None,
+    ) -> None:
+        del mount_path
+        anyio.run(self.run_async, transport=transport)
+
+
+fastmcp_server = FastMCPServerAdapter()
+server = fastmcp_server
 
