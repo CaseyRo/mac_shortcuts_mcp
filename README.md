@@ -25,11 +25,27 @@ uv sync
   ```
   - Pass `--transport http` to serve JSON responses instead of SSE
 
-### Legacy Typer CLI (advanced HTTP options)
-- STDIO: `uv run mac-shortcuts-mcp stdio`
-- HTTP: `uv run mac-shortcuts-mcp http --host 0.0.0.0 --port 8000`
-  - Pass `--certfile`/`--keyfile` for HTTPS
-  - Provide `--allowed-host` / `--allowed-origin` to enable DNS-rebinding protection
+### Secure HTTP hosting options
+
+The FastMCP runner currently binds without TLS and leaves DNS-rebinding
+protection disabled. For HTTPS termination or to enforce an
+`allowed_hosts`/`allowed_origins` policy, invoke the Typer-based CLI
+instead:
+
+```bash
+uv run python -m mac_shortcuts_mcp http \
+  --host 0.0.0.0 \
+  --port 8443 \
+  --allowed-host example.com \
+  --allowed-origin https://example.com \
+  --certfile /path/to/fullchain.pem \
+  --keyfile /path/to/privkey.pem
+```
+
+- Omit `--certfile/--keyfile` to serve HTTP only, or change `--host`
+  to `127.0.0.1` when terminating TLS via a reverse proxy.
+- Provide multiple `--allowed-host` / `--allowed-origin` flags as
+  needed to re-enable FastMCP's DNS-rebinding protection.
 
 ## Tool payload
 ```json
