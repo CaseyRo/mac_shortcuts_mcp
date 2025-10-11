@@ -8,7 +8,6 @@ from typing import Any
 
 import anyio
 from fastmcp.server.server import FastMCP as FastMCPBase
-from fastmcp.tools.tool import TextContent, ToolResult
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field
@@ -26,47 +25,6 @@ SERVER_INSTRUCTIONS = (
     "Execute Siri Shortcuts on macOS hosts using the `shortcuts` command line tool. "
     "Provide the shortcut display name and optional text input."
 )
-
-RUN_SHORTCUT_OUTPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "required": [
-        "command",
-        "returnCode",
-        "stdout",
-        "stderr",
-        "timedOut",
-        "succeeded",
-    ],
-    "additionalProperties": False,
-    "properties": {
-        "command": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Command that was executed.",
-        },
-        "returnCode": {
-            "type": ["integer", "null"],
-            "description": "Process return code when available.",
-        },
-        "stdout": {
-            "type": "string",
-            "description": "Captured standard output from the shortcut.",
-        },
-        "stderr": {
-            "type": "string",
-            "description": "Captured standard error from the shortcut.",
-        },
-        "timedOut": {
-            "type": "boolean",
-            "description": "True if execution timed out.",
-        },
-        "succeeded": {
-            "type": "boolean",
-            "description": "True when the shortcut completed successfully.",
-        },
-    },
-}
-
 
 class RunShortcutArguments(BaseModel):
     """Request payload for the ``run_shortcut`` tool."""
@@ -92,6 +50,7 @@ class RunShortcutArguments(BaseModel):
 class RunShortcutStructuredResponse(BaseModel):
     """Structured response returned from the ``run_shortcut`` tool."""
 
+    summary: str
     command: list[str]
     returnCode: int | None
     stdout: str
@@ -164,9 +123,11 @@ def _register_run_shortcut_tool(app: FastMCP) -> None:
             "Run a Siri Shortcut that exists on the host macOS machine using "
             "the `shortcuts run` command."
         ),
-        output_schema=RUN_SHORTCUT_OUTPUT_SCHEMA,
+        structured_output=True,
     )
-    async def _run_shortcut_tool(arguments: RunShortcutArguments) -> ToolResult:
+    async def _run_shortcut_tool(
+        arguments: RunShortcutArguments,
+    ) -> RunShortcutStructuredResponse:
         shortcut_name = arguments.shortcutName.strip()
         if not shortcut_name:
             raise ShortcutExecutionError("`shortcutName` must be a non-empty string.")
@@ -179,29 +140,20 @@ def _register_run_shortcut_tool(app: FastMCP) -> None:
             timeout=timeout_seconds,
         )
 
-        structured = RunShortcutStructuredResponse(
-            command=list(execution.command),
-            returnCode=execution.return_code,
-            stdout=execution.stdout,
-            stderr=execution.stderr,
-            timedOut=execution.timed_out,
-            succeeded=execution.succeeded,
-        )
-
         summary = _build_summary(
             shortcut_name=shortcut_name,
             execution=execution,
             timeout_seconds=timeout_seconds,
         )
 
-        return ToolResult(
-            content=[
-                TextContent(
-                    type="text",
-                    text=summary,
-                )
-            ],
-            structured_content=structured.model_dump(),
+        return RunShortcutStructuredResponse(
+            summary=summary,
+            command=list(execution.command),
+            returnCode=execution.return_code,
+            stdout=execution.stdout,
+            stderr=execution.stderr,
+            timedOut=execution.timed_out,
+            succeeded=execution.succeeded,
         )
 
 
@@ -228,7 +180,6 @@ def create_fastmcp_app(
 
     app = FastMCP(
         name=SERVER_NAME,
-        version=_get_version(),
         instructions=SERVER_INSTRUCTIONS,
         website_url="https://support.apple.com/guide/shortcuts/welcome/mac",
         host=host,
@@ -237,6 +188,14 @@ def create_fastmcp_app(
         stateless_http=stateless_http,
         transport_security=transport_security,
     )
+
+    # ``mcp.server.fastmcp.FastMCP`` no longer accepts ``version=`` in its
+    # constructor (the metadata now lives on the wrapped low-level server).
+    # Preserve the published package version in the handshake metadata when
+    # possible so clients can keep displaying it.
+    low_level_server = getattr(app, "_mcp_server", None)
+    if low_level_server is not None and getattr(low_level_server, "version", None) is None:
+        low_level_server.version = _get_version()
 
     _register_run_shortcut_tool(app)
     return app
