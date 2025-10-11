@@ -261,7 +261,18 @@ async def serve_http(
 class FastMCPServerAdapter(FastMCPBase[Any]):
     """Adapter to expose the server via the FastMCP CLI."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, version: str | None = None, **_: Any) -> None:
+        """Initialise the adapter, ignoring legacy keyword arguments.
+
+        Recent releases of the ``mcp`` package removed the ``version`` keyword
+        from :class:`mcp.server.fastmcp.FastMCP`. Older FastMCP CLI versions may
+        still attempt to provide that keyword when instantiating the exported
+        ``server`` object. Accept (and discard) it here so both old and new
+        CLIs can construct the adapter without raising a ``TypeError``.
+        """
+
+        del version
+
         super().__init__(
             name=SERVER_NAME,
             instructions=SERVER_INSTRUCTIONS,
