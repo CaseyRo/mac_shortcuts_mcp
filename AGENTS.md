@@ -20,3 +20,7 @@
 - Added a lightweight adapter (`fastmcp_server`) so the existing server works with `fastmcp run` without rewriting the protocol handlers.
 - Documented the new workflow in the README and noted the FastMCP dependency to reduce future confusion about transport options.
 - Exported the FastMCP adapter as `server` so `fastmcp run src/mac_shortcuts_mcp/server.py` works without specifying an entry point.
+
+## 2025-10-11 Notes
+- Updated the FastMCP integration for the latest `mcp` release: constructor no longer accepts `version=` and tool decorators use `structured_output` instead of `output_schema`.
+- Tool responses now return a Pydantic model containing both the execution summary and structured fields so schema generation continues to work without manual JSON.
