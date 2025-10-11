@@ -13,8 +13,8 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field
 
-from . import __version__
-from .shortcuts import (
+from mac_shortcuts_mcp import __version__
+from mac_shortcuts_mcp.shortcuts import (
     ShortcutExecutionError,
     ShortcutExecutionResult,
     run_shortcut,
