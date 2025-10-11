@@ -25,12 +25,6 @@ uv sync
   ```
   - Pass `--transport http` to serve JSON responses instead of SSE
 
-### Legacy Typer CLI (advanced HTTP options)
-- STDIO: `uv run mac-shortcuts-mcp stdio`
-- HTTP: `uv run mac-shortcuts-mcp http --host 0.0.0.0 --port 8000`
-  - Pass `--certfile`/`--keyfile` for HTTPS
-  - Provide `--allowed-host` / `--allowed-origin` to enable DNS-rebinding protection
-
 ## Tool payload
 ```json
 {
