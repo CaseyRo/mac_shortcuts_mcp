@@ -10,8 +10,8 @@ import typer
 
 from mcp.server.fastmcp import FastMCP
 
-from . import __version__
-from .server import create_fastmcp_app
+from mac_shortcuts_mcp import __version__
+from mac_shortcuts_mcp.server import create_fastmcp_app
 
 app = typer.Typer(
     help="Run the mac-shortcuts-mcp server over stdio or HTTP.",
