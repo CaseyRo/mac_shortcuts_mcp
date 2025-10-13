@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Iterable
 from importlib.metadata import PackageNotFoundError, version as pkg_version
-from typing import Any
+from typing import Annotated, Any
 
 import anyio
 from fastmcp.server.server import FastMCP as FastMCPBase
@@ -128,17 +128,41 @@ def _register_run_shortcut_tool(app: FastMCP) -> None:
         structured_output=True,
     )
     async def _run_shortcut_tool(
-        arguments: RunShortcutArguments,
+        shortcutName: Annotated[
+            str,
+            Field(
+                ...,
+                min_length=1,
+                description="Display name of the shortcut to execute.",
+            ),
+        ],
+        textInput: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Optional text forwarded to the shortcut via the `--input` argument."
+                ),
+            ),
+        ] = None,
+        timeoutSeconds: Annotated[
+            float | None,
+            Field(
+                default=None,
+                gt=0,
+                description="Maximum seconds to wait for the shortcut before aborting.",
+            ),
+        ] = None,
     ) -> RunShortcutStructuredResponse:
-        shortcut_name = arguments.shortcutName.strip()
+        shortcut_name = shortcutName.strip()
         if not shortcut_name:
             raise ShortcutExecutionError("`shortcutName` must be a non-empty string.")
 
-        timeout_seconds = _validate_timeout(arguments.timeoutSeconds)
+        timeout_seconds = _validate_timeout(timeoutSeconds)
 
         execution = await run_shortcut(
             shortcut_name=shortcut_name,
-            text_input=arguments.textInput,
+            text_input=textInput,
             timeout=timeout_seconds,
         )
 
