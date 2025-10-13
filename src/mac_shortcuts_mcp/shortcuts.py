@@ -39,7 +39,7 @@ async def run_shortcut(
 
     Args:
         shortcut_name: The display name of the shortcut to run.
-        text_input: Optional text input forwarded with ``--input``.
+        text_input: Optional text input piped to the shortcut via stdin.
         timeout: Optional timeout in seconds before the process is terminated.
 
     Returns:
@@ -58,12 +58,17 @@ async def run_shortcut(
         )
 
     command = [binary, "run", shortcut_name]
+
+    input_bytes: bytes | None = None
+    stdin_setting = None
     if text_input:
-        command.extend(["--input", text_input])
+        input_bytes = text_input.encode("utf-8")
+        stdin_setting = asyncio.subprocess.PIPE
 
     try:
         process = await asyncio.create_subprocess_exec(
             *command,
+            stdin=stdin_setting,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -77,13 +82,17 @@ async def run_shortcut(
     stderr_bytes: bytes = b""
 
     try:
+        communicate_kwargs = {}
+        if input_bytes is not None:
+            communicate_kwargs["input"] = input_bytes
+
         if timeout is not None:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(),
+                process.communicate(**communicate_kwargs),
                 timeout=timeout,
             )
         else:
-            stdout_bytes, stderr_bytes = await process.communicate()
+            stdout_bytes, stderr_bytes = await process.communicate(**communicate_kwargs)
     except asyncio.TimeoutError:
         timed_out = True
         process.kill()

@@ -37,9 +37,7 @@ class RunShortcutArguments(BaseModel):
     )
     textInput: str | None = Field(
         default=None,
-        description=(
-            "Optional text forwarded to the shortcut via the `--input` argument."
-        ),
+        description="Optional text piped to the shortcut's standard input.",
     )
     timeoutSeconds: float | None = Field(
         default=None,
