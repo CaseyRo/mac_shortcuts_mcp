@@ -12,6 +12,15 @@ Minimal MCP server that exposes macOS Shortcuts execution to ChatGPT-compatible 
 uv sync
 ```
 
+### Updating after pulling changes
+
+Run `uv sync` again whenever you `git pull` new commits. The command reads the
+project's `pyproject.toml`/`uv.lock` and makes sure the virtual environment
+matches exactly, installing new dependencies, updating existing ones, and
+removing anything that is no longer required. No additional cleanup steps are
+needed unless you intentionally want to clear your cached wheels (use `uv cache
+prune`) or recreate the environment from scratch.
+
 ## Run
 
 ### FastMCP CLI (recommended)

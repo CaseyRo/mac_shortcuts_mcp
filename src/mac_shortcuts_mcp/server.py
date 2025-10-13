@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Iterable
 from importlib.metadata import PackageNotFoundError, version as pkg_version
 from typing import Any
@@ -60,6 +61,9 @@ class RunShortcutStructuredResponse(BaseModel):
 
 
 _APP: FastMCP | None = None
+
+
+_FASTMCP_SUPPORTS_VERSION = "version" in inspect.signature(FastMCP.__init__).parameters
 
 
 def _get_version() -> str:
@@ -178,24 +182,31 @@ def create_fastmcp_app(
         allowed_origins=allow_origins,
     )
 
-    app = FastMCP(
-        name=SERVER_NAME,
-        instructions=SERVER_INSTRUCTIONS,
-        website_url="https://support.apple.com/guide/shortcuts/welcome/mac",
-        host=host,
-        port=port,
-        json_response=json_response,
-        stateless_http=stateless_http,
-        transport_security=transport_security,
-    )
+    app_kwargs: dict[str, Any] = {
+        "name": SERVER_NAME,
+        "instructions": SERVER_INSTRUCTIONS,
+        "website_url": "https://support.apple.com/guide/shortcuts/welcome/mac",
+        "host": host,
+        "port": port,
+        "json_response": json_response,
+        "stateless_http": stateless_http,
+        "transport_security": transport_security,
+    }
 
-    # ``mcp.server.fastmcp.FastMCP`` no longer accepts ``version=`` in its
-    # constructor (the metadata now lives on the wrapped low-level server).
-    # Preserve the published package version in the handshake metadata when
-    # possible so clients can keep displaying it.
-    low_level_server = getattr(app, "_mcp_server", None)
-    if low_level_server is not None and getattr(low_level_server, "version", None) is None:
-        low_level_server.version = _get_version()
+    package_version = _get_version()
+    if _FASTMCP_SUPPORTS_VERSION:
+        app_kwargs["version"] = package_version
+
+    app = FastMCP(**app_kwargs)
+
+    if not _FASTMCP_SUPPORTS_VERSION:
+        # ``mcp.server.fastmcp.FastMCP`` no longer accepts ``version=`` in its
+        # constructor (the metadata now lives on the wrapped low-level server).
+        # Preserve the published package version in the handshake metadata when
+        # possible so clients can keep displaying it.
+        low_level_server = getattr(app, "_mcp_server", None)
+        if low_level_server is not None and getattr(low_level_server, "version", None) is None:
+            low_level_server.version = package_version
 
     _register_run_shortcut_tool(app)
     return app
