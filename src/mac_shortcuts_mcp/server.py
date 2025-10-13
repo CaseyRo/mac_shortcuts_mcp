@@ -27,6 +27,25 @@ SERVER_INSTRUCTIONS = (
     "Provide the shortcut display name and optional text input."
 )
 
+class RunShortcutArguments(BaseModel):
+    """Request payload for the ``run_shortcut`` tool."""
+
+    shortcutName: str = Field(
+        ...,
+        min_length=1,
+        description="Display name of the shortcut to execute.",
+    )
+    textInput: str | None = Field(
+        default=None,
+        description="Optional text piped to the shortcut's standard input.",
+    )
+    timeoutSeconds: float | None = Field(
+        default=None,
+        gt=0,
+        description="Maximum seconds to wait for the shortcut before aborting.",
+    )
+
+
 class RunShortcutStructuredResponse(BaseModel):
     """Structured response returned from the ``run_shortcut`` tool."""
 

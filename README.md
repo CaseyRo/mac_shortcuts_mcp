@@ -34,6 +34,18 @@ prune`) or recreate the environment from scratch.
   ```
   - Pass `--transport http` to serve JSON responses instead of SSE
 
+## Connecting from clients
+
+Most MCP clients expect one of two transport styles. The FastMCP runner exposes
+both, using the following connection details:
+
+- **STDIO transport** – launch the server with the stdio command above and
+  configure the client to execute the exact command. The client should read and
+  write JSON-RPC frames over the spawned process' stdin/stdout streams.
+- **HTTP / SSE transport** – start the server with the HTTP example and point
+  the client at `http://$HOST:$PORT/mcp` (for JSON responses use the same path
+  over HTTPS/HTTP). The SSE variant also uses the `/mcp` mount for the stream.
+
 ### Secure HTTP hosting options
 
 The FastMCP runner currently binds without TLS and leaves DNS-rebinding
@@ -64,3 +76,6 @@ uv run python -m mac_shortcuts_mcp http \
   "timeoutSeconds": 30
 }
 ```
+
+Providing `textInput` pipes the supplied text to the shortcut's standard input,
+mirroring `echo "value" | shortcuts run "Shortcut Name"`.
