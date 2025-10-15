@@ -61,7 +61,7 @@ async def run_shortcut(
 
     input_bytes: bytes | None = None
     stdin_setting = None
-    if text_input:
+    if text_input is not None:
         input_bytes = text_input.encode("utf-8")
         stdin_setting = asyncio.subprocess.PIPE
 

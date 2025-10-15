@@ -3,7 +3,7 @@
 Minimal MCP server that exposes macOS Shortcuts execution to ChatGPT-compatible clients.
 
 ## Requirements
-- macOS host with the [Shortcuts command line tool](https://support.apple.com/guide/shortcuts/welcome/mac) installed
+- macOS host
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/) for dependency management
 - [FastMCP](https://pypi.org/project/fastmcp/) (installed automatically via `uv`) for the streamlined MCP runner
 
@@ -46,6 +46,23 @@ both, using the following connection details:
   the client at `http://$HOST:$PORT/mcp` (for JSON responses use the same path
   over HTTPS/HTTP). The SSE variant also uses the `/mcp` mount for the stream.
 
+## Tool payload
+
+Run the MCP client of choice and provide the client with the following payload:
+
+```json
+{
+  "shortcutName": "Show Content",
+  "textInput": "testing output",
+  "timeoutSeconds": 30
+}
+```
+
+Providing `textInput` pipes the supplied text to the shortcut's standard input,
+mirroring ``` `echo "value" | shortcuts run "Shortcut Name"`. ```
+
+![Screenshot of a successful run of a shortcut.](https://github.com/CaseyRo/mac_shortcuts_mcp/blob/fd3b0a480d87c82740672bf2a11e6df8ff224b11/img/SCR-20251015-odll.png)
+
 ### Secure HTTP hosting options
 
 The FastMCP runner currently binds without TLS and leaves DNS-rebinding
@@ -67,19 +84,5 @@ uv run python -m mac_shortcuts_mcp http \
   to `127.0.0.1` when terminating TLS via a reverse proxy.
 - Provide multiple `--allowed-host` / `--allowed-origin` flags as
   needed to re-enable FastMCP's DNS-rebinding protection.
-
-## Tool payload
-```json
-{
-  "shortcutName": "Show Content",
-  "textInput": "testing output",
-  "timeoutSeconds": 30
-}
-```
-
-Providing `textInput` pipes the supplied text to the shortcut's standard input,
-mirroring ``` `echo "value" | shortcuts run "Shortcut Name"`. ```
-
-![Screenshot of a successful run of a shortcut.](https://github.com/CaseyRo/mac_shortcuts_mcp/blob/fd3b0a480d87c82740672bf2a11e6df8ff224b11/img/SCR-20251015-odll.png)
 
 
