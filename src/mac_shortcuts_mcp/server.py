@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import logging
+import os
+import signal
+import sys
 from collections.abc import Iterable
 from importlib.metadata import PackageNotFoundError, version as pkg_version
 from typing import Annotated, Any
@@ -19,6 +24,13 @@ from mac_shortcuts_mcp.shortcuts import (
     ShortcutExecutionResult,
     run_shortcut,
 )
+
+# Configure logging if not already configured
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 SERVER_NAME = "mac-shortcuts-mcp"
 RUN_SHORTCUT_TOOL_NAME = "run_shortcut"
@@ -114,6 +126,83 @@ def _validate_timeout(timeout_value: float | None) -> float | None:
     if timeout_value <= 0:
         raise ShortcutExecutionError("`timeoutSeconds` must be greater than 0.")
     return timeout_value
+
+
+def _setup_signal_handlers(shutdown_event: asyncio.Event) -> None:
+    """Register signal handlers for graceful shutdown.
+
+    Args:
+        shutdown_event: Event to set when shutdown is requested.
+    """
+    def handle_shutdown(signum: int, frame: Any) -> None:
+        """Signal handler that triggers graceful shutdown."""
+        sig_name = signal.Signals(signum).name
+        if not shutdown_event.is_set():
+            logger.info(f"Received {sig_name}, initiating graceful shutdown...")
+            shutdown_event.set()
+        else:
+            logger.info(f"Received {sig_name} during shutdown, please wait...")
+
+    # Register handlers for SIGINT (Ctrl+C) and SIGTERM
+    signals_to_handle = [signal.SIGINT, signal.SIGTERM]
+    for sig in signals_to_handle:
+        try:
+            signal.signal(sig, handle_shutdown)
+        except (OSError, ValueError) as exc:
+            # Some signals may not be available on all platforms
+            logger.debug(f"Could not register handler for {sig.name}: {exc}")
+
+
+async def _run_with_graceful_shutdown(
+    main_task: asyncio.Task[Any],
+    shutdown_event: asyncio.Event,
+    *,
+    timeout: float = 10.0,
+) -> None:
+    """Run a task with graceful shutdown support.
+
+    Args:
+        main_task: The main server task to run.
+        shutdown_event: Event that signals shutdown request.
+        timeout: Maximum seconds to wait for graceful shutdown (default: 10).
+    """
+    try:
+        # Wait for either the main task to complete or shutdown signal
+        shutdown_waiter = asyncio.create_task(shutdown_event.wait())
+        done, pending = await asyncio.wait(
+            [main_task, shutdown_waiter],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        # If shutdown was signaled, cancel the main task
+        if shutdown_event.is_set():
+            if not main_task.done():
+                logger.info("Cancelling server task...")
+                main_task.cancel()
+                try:
+                    await asyncio.wait_for(main_task, timeout=timeout)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Graceful shutdown timed out after {timeout}s, forcing exit"
+                    )
+                    sys.exit(1)
+                except asyncio.CancelledError:
+                    logger.info("Server task cancelled successfully")
+
+        # Clean up the waiter task if it's still pending
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    except asyncio.CancelledError:
+        logger.info("Shutdown cancelled")
+        raise
+    except Exception as exc:
+        logger.error(f"Error during shutdown: {exc}")
+        raise
 
 
 def _register_run_shortcut_tool(app: FastMCP) -> None:
@@ -244,9 +333,25 @@ def get_app() -> FastMCP:
 
 
 async def serve_stdio() -> None:
-    """Run the MCP server over stdio using FastMCP's runner."""
+    """Run the MCP server over stdio using FastMCP's runner.
+
+    Note: Graceful shutdown via KeyboardInterrupt doesn't work well with stdio
+    due to stdin blocking. We install a SIGINT handler that calls os._exit(0)
+    directly for immediate termination.
+    """
+
+    # Install signal handler INSIDE the async context to override anyio's handler
+    def immediate_exit(signum: int, frame: Any) -> None:
+        """Exit immediately on SIGINT without any cleanup."""
+        logger.info("\nReceived interrupt signal, exiting...")
+        os._exit(0)
+
+    signal.signal(signal.SIGINT, immediate_exit)
+    signal.signal(signal.SIGTERM, immediate_exit)
 
     app = get_app()
+    logger.info(f"MCP server '{SERVER_NAME}' ready on STDIO transport")
+
     await app.run_stdio_async()
 
 
@@ -261,7 +366,11 @@ async def serve_http(
     ssl_certfile: str | None = None,
     ssl_keyfile: str | None = None,
 ) -> None:
-    """Run the MCP server using FastMCP's HTTP/SSE runner."""
+    """Run the MCP server using FastMCP's HTTP/SSE runner with graceful shutdown."""
+
+    # Setup signal handlers for graceful shutdown
+    shutdown_event = asyncio.Event()
+    _setup_signal_handlers(shutdown_event)
 
     app = create_fastmcp_app(
         host=host,
@@ -271,6 +380,10 @@ async def serve_http(
         allowed_hosts=allowed_hosts,
         allowed_origins=allowed_origins,
     )
+
+    protocol = "HTTPS" if ssl_certfile else "HTTP"
+    mode = "JSON" if json_response else "SSE"
+    logger.info(f"MCP server '{SERVER_NAME}' starting on {protocol} at {host}:{port} ({mode} mode)")
 
     if ssl_certfile or ssl_keyfile:
         import uvicorn
@@ -285,10 +398,15 @@ async def serve_http(
             ssl_keyfile=ssl_keyfile,
         )
         server = uvicorn.Server(config)
-        await server.serve()
+
+        # Uvicorn has its own signal handling, but we'll wrap it for consistency
+        main_task = asyncio.create_task(server.serve())
+        await _run_with_graceful_shutdown(main_task, shutdown_event)
         return
 
-    await app.run_streamable_http_async()
+    # Run FastMCP's HTTP runner with graceful shutdown
+    main_task = asyncio.create_task(app.run_streamable_http_async())
+    await _run_with_graceful_shutdown(main_task, shutdown_event)
 
 
 class FastMCPServerAdapter(FastMCPBase[Any]):
@@ -325,12 +443,26 @@ class FastMCPServerAdapter(FastMCPBase[Any]):
         del path, log_level, show_banner
 
         normalized_transport = (transport or "stdio").lower()
+
+        # For stdio mode, install immediate exit handler to override anyio
         if normalized_transport == "stdio":
+            def immediate_exit(signum: int, frame: Any) -> None:
+                """Exit immediately on SIGINT without any cleanup."""
+                logger.info("\nReceived interrupt signal, exiting...")
+                os._exit(0)
+
+            signal.signal(signal.SIGINT, immediate_exit)
+            signal.signal(signal.SIGTERM, immediate_exit)
+
+            logger.info("Starting MCP server in STDIO mode...")
+            logger.info("Press Ctrl+C to stop the server")
             await serve_stdio()
             return
 
         if normalized_transport in {"http", "streamable-http", "sse"}:
             json_response = normalized_transport == "http"
+            logger.info("Starting MCP server in HTTP mode...")
+            logger.info("Press Ctrl+C to stop the server")
             await serve_http(
                 host=host or "0.0.0.0",
                 port=port or 8000,

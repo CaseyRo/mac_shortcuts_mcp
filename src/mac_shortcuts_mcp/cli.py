@@ -3,15 +3,38 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
+import signal
+import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 
-from mcp.server.fastmcp import FastMCP
-
 from mac_shortcuts_mcp import __version__
-from mac_shortcuts_mcp.server import create_fastmcp_app
+from mac_shortcuts_mcp.server import serve_http, serve_stdio
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+def _install_immediate_exit_handler() -> None:
+    """Install a signal handler that exits immediately without cleanup.
+
+    This is necessary for stdio mode where stdin blocking prevents
+    graceful cancellation of async tasks.
+    """
+    def immediate_exit(signum: int, frame: Any) -> None:
+        """Exit immediately on SIGINT without any cleanup."""
+        logger.info("\nReceived interrupt signal, exiting...")
+        os._exit(0)
+
+    signal.signal(signal.SIGINT, immediate_exit)
 
 app = typer.Typer(
     help="Run the mac-shortcuts-mcp server over stdio or HTTP.",
@@ -28,34 +51,16 @@ def version() -> None:
 
 @app.command()
 def stdio() -> None:
-    """Start the MCP server using the stdio transport."""
+    """Start the MCP server using the stdio transport with graceful shutdown."""
 
-    app_instance = create_fastmcp_app()
-    asyncio.run(app_instance.run_stdio_async())
+    # Install immediate exit handler before starting server
+    # This ensures Ctrl+C exits immediately without stdin lock issues
+    _install_immediate_exit_handler()
 
+    logger.info("Starting MCP server in STDIO mode...")
+    logger.info("Press Ctrl+C to stop the server")
 
-async def _run_http(
-    app_instance: FastMCP,
-    *,
-    ssl_certfile: str | None,
-    ssl_keyfile: str | None,
-) -> None:
-    if ssl_certfile or ssl_keyfile:
-        import uvicorn
-
-        http_app = app_instance.streamable_http_app()
-        config = uvicorn.Config(
-            http_app,
-            host=app_instance.settings.host,
-            port=app_instance.settings.port,
-            log_level=app_instance.settings.log_level.lower(),
-            ssl_certfile=ssl_certfile,
-            ssl_keyfile=ssl_keyfile,
-        )
-        server = uvicorn.Server(config)
-        await server.serve()
-    else:
-        await app_instance.run_streamable_http_async()
+    asyncio.run(serve_stdio())
 
 
 @app.command()
@@ -95,7 +100,7 @@ def http(
         help="Path to the TLS private key matching --certfile.",
     ),
 ) -> None:
-    """Start the MCP server over HTTP(S) with streaming support."""
+    """Start the MCP server over HTTP(S) with streaming support and graceful shutdown."""
 
     if bool(certfile) ^ bool(keyfile):
         raise typer.BadParameter(
@@ -103,30 +108,25 @@ def http(
             param_hint="certfile",
         )
 
-    if certfile and keyfile:
-        ssl_options = {
-            "ssl_certfile": str(certfile),
-            "ssl_keyfile": str(keyfile),
-        }
-    else:
-        ssl_options = {}
+    logger.info("Starting MCP server in HTTP mode...")
+    logger.info("Press Ctrl+C to stop the server")
 
-    app_instance = create_fastmcp_app(
-        host=host,
-        port=port,
-        json_response=json_response,
-        stateless_http=stateless,
-        allowed_hosts=allowed_host,
-        allowed_origins=allowed_origin,
-    )
-
-    asyncio.run(
-        _run_http(
-            app_instance,
-            ssl_certfile=ssl_options.get("ssl_certfile"),
-            ssl_keyfile=ssl_options.get("ssl_keyfile"),
+    try:
+        asyncio.run(
+            serve_http(
+                host=host,
+                port=port,
+                json_response=json_response,
+                stateless=stateless,
+                allowed_hosts=allowed_host,
+                allowed_origins=allowed_origin,
+                ssl_certfile=str(certfile) if certfile else None,
+                ssl_keyfile=str(keyfile) if keyfile else None,
+            )
         )
-    )
+    except KeyboardInterrupt:
+        logger.info("Server stopped")
+        sys.exit(0)
 
 
 def run() -> None:
