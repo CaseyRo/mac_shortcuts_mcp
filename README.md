@@ -80,6 +80,6 @@ uv run python -m mac_shortcuts_mcp http \
 Providing `textInput` pipes the supplied text to the shortcut's standard input,
 mirroring ```bash `echo "value" | shortcuts run "Shortcut Name"`. ```
 
-![Screenshot of a successful run of a shortcut.](https://myoctocat.com/assets/images/base-octocat.svg)
+![Screenshot of a successful run of a shortcut.](https://github.com/CaseyRo/mac_shortcuts_mcp/blob/fd3b0a480d87c82740672bf2a11e6df8ff224b11/img/SCR-20251015-odll.png)
 
 
