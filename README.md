@@ -71,8 +71,8 @@ uv run python -m mac_shortcuts_mcp http \
 ## Tool payload
 ```json
 {
-  "shortcutName": "Save Video",
-  "textInput": "https://youtube.com/watch?v=...",
+  "shortcutName": "Show Content",
+  "textInput": "testing output",
   "timeoutSeconds": 30
 }
 ```
